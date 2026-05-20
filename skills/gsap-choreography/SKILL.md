@@ -167,6 +167,15 @@ timeline
 
 **`ease: "none"` is correct here** — real typing is roughly constant speed, not eased.
 
+**Looping gotcha:** The counter object retains its end value across loops. Reset it in the reset block:
+
+```tsx
+timeline.add(() => {
+  counter.x = 0;
+  target.textContent = "";
+}, 0);
+```
+
 ## Stagger Patterns
 
 Elements appearing in groups should stagger, not pop simultaneously:
@@ -304,9 +313,36 @@ const updateScale = () => {
 
 Container maintains aspect ratio: `style={{ aspectRatio: `${FILM_WIDTH} / ${FILM_HEIGHT}` }}`.
 
+**Control positioning:** Play/pause buttons should live *inside* the scaled frame, not outside it. If placed outside, you need manual positioning math to account for the scale factor. Inside the frame, they scale naturally with everything else:
+
+```tsx
+// Inside the film frame div (scales with content)
+<div style={{ position: "absolute", bottom: 10, right: 10, zIndex: 60 }}>
+  <button onClick={() => playing ? tl.pause() : tl.play()}>
+    {playing ? "⏸" : "▶"}
+  </button>
+</div>
+```
+
 ## Accessibility
 
-Always support `prefers-reduced-motion`:
+Always support `prefers-reduced-motion`. Here is the hook:
+
+```tsx
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(mq.matches);
+    const handler = (e) => setReduced(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return reduced;
+}
+```
+
+Use it to skip the entire timeline and show a static resting state:
 
 ```tsx
 const prefersReducedMotion = usePrefersReducedMotion();
