@@ -1,0 +1,10 @@
+{
+  "name": "gsap-choreography",
+  "version": "1.0.0",
+  "description": "Build multi-scene GSAP product animations with cursor choreography, timeline orchestration, and scene transitions in React.",
+  "author": "Costumary",
+  "homepage": "https://www.costumary.com",
+  "skills": [
+    "skills/gsap-choreography"
+  ]
+}
