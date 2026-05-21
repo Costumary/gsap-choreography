@@ -1,0 +1,223 @@
+---
+description: Use when building multi-scene GSAP animations for product demos, hero walkthroughs, or scripted UI sequences in React. Covers timeline architecture, cursor choreography, scene transitions, click systems, typed text, and animation coordination across components.
+globs:
+  - "**/*film*"
+  - "**/*demo*"
+  - "**/*animation*"
+  - "**/*choreograph*"
+  - "**/*gsap*"
+  - "**/*timeline*"
+---
+
+# GSAP Choreography
+
+Build scripted, multi-scene product animations using GSAP timelines in React. Not tweens-101 — this is the orchestration layer: how to coordinate cursor movement, click feedback, scene transitions, typed text, and UI state changes into a single looping timeline that feels like a directed film.
+
+## Architecture
+
+```
+film-script.ts          → Scene definitions, cursor paths, data (no GSAP)
+film-primitives.tsx      → Static DOM: frame, sidebar, cursor SVG (no GSAP)
+film-panels.tsx          → Scene content: each tab's UI (no GSAP)
+film-demo.tsx            → Single useGSAP hook: the entire choreography
+animation-provider.tsx   → React context: play/pause/restart coordination
+```
+
+**The rule:** GSAP code lives in exactly one file. Everything else is inert DOM with `data-film-*` attributes. This separation means designers edit visuals without touching animation, and the timeline can target any element by data attribute.
+
+## Timeline as Central Authority
+
+One `gsap.timeline()` owns the entire sequence. Every animation is a `.to()` or `.set()` call on this timeline, positioned with labels.
+
+```tsx
+const timeline = gsap.timeline({
+  repeat: -1,
+  repeatDelay: 0.75,
+  defaults: { ease: "power3.out" },
+});
+
+timeline
+  .to(cursor, { x: target.x, y: target.y, duration: 0.72 }, "groupMove")
+  .to(toolbar, { backgroundColor: "rgba(182,95,114,0.15)", duration: 0.18 }, "groupMove+=0.55");
+
+click(target, "groupClick");
+
+timeline
+  .to(groupOutline, { autoAlpha: 1, scale: 1, duration: 0.38 }, "groupClick+=0.1")
+  .to(note, { autoAlpha: 1, y: 0, duration: 0.38 }, "noteClick+=0.12");
+```
+
+**Why one timeline:** Multiple timelines desync on tab-switch, resize, or replay. A single timeline with labels gives you scrubbing, replay, and pause for free. Labels are the API between "what happens" and "when."
+
+## Label Naming Convention
+
+Name labels by what the user *does*, not what animates:
+
+```
+"dropClick"        → user drops references onto board
+"groupClick"       → user clicks the group tool
+"noteMove"         → cursor travels to the note tool
+"sidebarCollapse"  → sidebar shrinks to icon-only
+"navMaterials"     → user clicks Materials in nav
+"typeStart"        → cursor reaches the input field
+"sendClick"        → user clicks send on the chat
+"settle"           → animation winds down, UI resets
+```
+
+Position everything relative to labels with `"labelName+=0.12"` offsets. Never use absolute seconds.
+
+## Cursor System
+
+The cursor is a positioned SVG that moves via the timeline. It must feel human, not robotic.
+
+### Movement
+
+```tsx
+.to(cursor, { x: target.x, y: target.y, duration: 0.72, ease: "power2.out" }, "moveLabel")
+```
+
+- Short hop (same area): 0.4–0.6s
+- Cross-screen travel: 0.7–1.0s
+- Entering from off-screen: 1.0–1.2s
+
+Never use `ease: "linear"` for cursor movement.
+
+### Click Feedback
+
+Every click needs a cursor squeeze and a ripple burst:
+
+```tsx
+function click(position: { x: number; y: number }, label: string) {
+  timeline
+    .set(ripple, { x: position.x, y: position.y, scale: 0.2, autoAlpha: 0.55 }, label)
+    .to(cursor, { scale: 0.88, duration: 0.08, ease: "power2.out" }, label)
+    .to(ripple, { scale: 3.4, autoAlpha: 0, duration: 0.54, ease: "power2.out" }, label)
+    .to(cursor, { scale: 1, duration: 0.16, ease: "back.out(2.2)" }, `${label}+=0.09`);
+}
+```
+
+### Cursor Position Measurement (CRITICAL)
+
+**Never hardcode cursor coordinates.** Always measure targets from actual DOM elements:
+
+```tsx
+const measure = (el: HTMLElement) => {
+  const frame = root.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const s = scale || 1;
+  return {
+    x: Math.round((r.left + r.width / 2 - frame.left) / s),
+    y: Math.round((r.top + r.height / 2 - frame.top) / s),
+  };
+};
+```
+
+## Scene Transitions
+
+```tsx
+// 1. Update nav state (immediate, not animated)
+.add(() => {
+  setActiveNav(root, "nav-materials");
+  setProgressDots(root, 1);
+  setCaption(captionEl, scenes[1].caption);
+}, "navMaterials+=0.56")
+
+// 2. Cross-fade content
+.to(prevTab, { autoAlpha: 0, duration: 0.24 }, "materialsClick+=0.08")
+.to(nextTab, { autoAlpha: 1, duration: 0.28 }, "materialsClick+=0.14")
+```
+
+Use `autoAlpha` (not `opacity`) — it sets `visibility: hidden` at 0.
+
+## Typed Text Effect
+
+```tsx
+const prompt = "What should I do next?";
+const counter = { x: 0 };
+
+timeline
+  .to(placeholder, { autoAlpha: 0, duration: 0.1 }, "typeStart+=0.56")
+  .to(caret, { autoAlpha: 1, duration: 0.1 }, "typeStart+=0.56")
+  .to(counter, {
+    x: prompt.length,
+    duration: 1.65,
+    ease: "none",
+    onUpdate: () => {
+      target.textContent = prompt.slice(0, Math.round(counter.x));
+    },
+  }, "typeStart+=0.62");
+```
+
+`ease: "none"` is correct — real typing is constant speed.
+
+## Element Initial States
+
+Set every animated element's start state explicitly at timeline position 0:
+
+```tsx
+gsap.set(cursor, { x: offScreenX, y: offScreenY });
+gsap.set(cards, { autoAlpha: 0, y: 26, scale: 0.82 });
+```
+
+For looping timelines, add a reset block at position 0.
+
+## Stagger Patterns
+
+```tsx
+.to(cards, {
+  autoAlpha: 1, y: 0, scale: 1,
+  rotation: (i: number) => rotations[i],
+  stagger: 0.07,
+  duration: 0.46,
+}, "dropClick+=0.16")
+```
+
+0.05–0.08s for related items, 0.10–0.15s for independent items.
+
+## Responsive Scaling
+
+Render at fixed design size, scale with CSS transform:
+
+```tsx
+const FILM_WIDTH = 1180;
+const FILM_HEIGHT = 760;
+
+<div style={{
+  width: FILM_WIDTH,
+  height: FILM_HEIGHT,
+  transform: `scale(${scale})`,
+  transformOrigin: "top left",
+}} />
+```
+
+## Data Attribute Convention
+
+```
+data-film-cursor          → the cursor SVG
+data-film-ripple          → click ripple circle
+data-film-tab="references"→ scene content panels
+data-film-nav="nav-materials" → sidebar nav items
+data-film-ref-card="0"    → indexed elements
+data-film-typed           → typed text target
+```
+
+Why data attributes over refs: queryable, readable, don't require threading React refs through component boundaries.
+
+## Accessibility
+
+Support `prefers-reduced-motion` — skip the timeline and show a static resting state. Register a paused empty timeline so play/pause controls don't crash.
+
+## Common Mistakes
+
+| Mistake | Fix |
+|---------|-----|
+| Hardcoded cursor coordinates | Always `measure()` from DOM elements |
+| `opacity` instead of `autoAlpha` | `autoAlpha` also sets `visibility: hidden` at 0 |
+| Linear cursor movement | Use `power2.out` or `power3.out` |
+| No reset block for looping timelines | Explicit `gsap.set()` at position 0 |
+| Absolute time positions (`2.5`) | Use labels + offsets |
+| Animating `left`/`top` instead of `x`/`y` | Transforms are compositor-friendly |
+| Missing breathing room between scenes | 0.8–1.5s dead time after major state changes |
+| Click without ripple+squeeze | Both needed — ripple alone looks like a UI bug |
+| `ease: "power2.out"` on typed text | Use `ease: "none"` (constant speed) |
+| Multiple useGSAP hooks for one sequence | One hook, one timeline, labels for structure |
