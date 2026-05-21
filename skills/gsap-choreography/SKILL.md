@@ -97,21 +97,47 @@ function click(position: { x: number; y: number }, label: string) {
 
 **Why `back.out(2.2)` on release:** The cursor slightly overshoots back to full scale, like a finger lifting off a touchpad. Without it, clicks feel mechanical.
 
-### Cursor Position Measurement
+### Cursor Position Measurement (CRITICAL)
 
-Cursor coordinates are relative to the film frame, not the viewport. Measure targets dynamically:
+**Never hardcode cursor coordinates.** This is the single most common mistake. Hardcoded `{ x: 300, y: 240 }` will miss the target on different screen sizes, after layout changes, or when the scaled frame does not match your assumptions. The cursor clicks on empty space and the whole demo looks broken.
+
+Always measure targets from the actual DOM elements:
 
 ```tsx
-function measureCenter(frame: DOMRect, el: HTMLElement, scale: number) {
+const measure = (el: HTMLElement) => {
+  const frame = root.getBoundingClientRect();
   const r = el.getBoundingClientRect();
+  const s = scale || 1;
   return {
-    x: Math.round((r.left + r.width / 2 - frame.left) / scale),
-    y: Math.round((r.top + r.height / 2 - frame.top) / scale),
+    x: Math.round((r.left + r.width / 2 - frame.left) / s),
+    y: Math.round((r.top + r.height / 2 - frame.top) / s),
   };
-}
+};
+
+// For resize handles, measure the corner instead of center
+const measureCorner = (el: HTMLElement) => {
+  const frame = root.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const s = scale || 1;
+  return {
+    x: Math.round((r.right - frame.left) / s),
+    y: Math.round((r.bottom - frame.top) / s),
+  };
+};
 ```
 
-Store fallback coordinates in the film script for SSR/test environments where DOM measurement returns zero.
+Measure once before building the timeline, then use the measured positions everywhere:
+
+```tsx
+const buttonPos = measure(addButton);
+const cardPos = measure(recipeCard);
+const sidebarItemPos = measure(navItem);
+
+tl.to(cursor, { x: buttonPos.x, y: buttonPos.y, duration: 0.7 }, "moveToButton");
+click(buttonPos, "buttonClick");
+```
+
+Store fallback coordinates in the film script for SSR/test environments where DOM measurement returns zero. But in the browser, always measure.
 
 ## Scene Transitions
 
@@ -380,6 +406,7 @@ data-film-send            → send button
 
 | Mistake | Fix |
 |---------|-----|
+| **Hardcoded cursor coordinates** | **Always `measure()` from DOM elements. Hardcoded positions miss targets after any layout change.** |
 | Using `opacity` instead of `autoAlpha` | `autoAlpha` also sets `visibility: hidden` at 0 |
 | Linear cursor movement | Use `power2.out` or `power3.out` for natural deceleration |
 | No reset block for looping timelines | Add explicit `gsap.set()` for every property at position 0 |
