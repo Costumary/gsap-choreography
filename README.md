@@ -6,6 +6,8 @@ No one teaches this. Plenty of GSAP tutorials cover tweens and scroll triggers. 
 
 This repo packages that knowledge as AI coding agent instructions. One skill, every platform.
 
+https://github.com/user-attachments/assets/0feb2bd5-3183-4345-abeb-b3a0641ba834
+
 ## What's inside
 
 ```
