@@ -1,4 +1,8 @@
-# gsap-choreography
+<p align="center">
+  <img src="assets/logo.webp" alt="gsap-choreography" width="180" />
+</p>
+
+<h1 align="center">gsap-choreography</h1>
 
 AI coding instructions for building scripted, multi-scene GSAP product animations — the kind of hero section you see on Linear, Milanote, and Stripe, where a fake cursor walks through the product while scenes transition on a choreographed timeline.
 
