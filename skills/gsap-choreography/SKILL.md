@@ -402,6 +402,78 @@ data-film-send            → send button
 
 **Why data attributes over refs:** The timeline targets elements with `gsap.utils.selector(root)` and CSS selectors. Data attributes are queryable, readable, and don't require threading React refs through component boundaries.
 
+## Responsive Scaling with CSS Zoom
+
+Demos that live inside a page layout (story steps, embedded showcases) need to fit containers narrower than their design width. Two scaling strategies exist:
+
+| Strategy | How it scales | Cursor coordinates | Use when |
+|----------|--------------|-------------------|----------|
+| Internal `transform: scale()` | Film owns its own scale factor | Frame design pixels, no compensation needed | Self-contained films with `FILM_WIDTH`/`FILM_HEIGHT` |
+| External CSS `zoom` wrapper | Parent container applies `zoom` | Must compensate: `getBoundingClientRect()` returns visual pixels, `clientWidth` returns CSS pixels | Simpler demos embedded in responsive grids |
+
+### Self-contained films handle their own scale
+
+Films that define `FILM_WIDTH`/`FILM_HEIGHT`, set `aspect-ratio` on the container, and scale an internal frame with `transform: scale(filmScale)` are fully self-contained. Their `measureCenter` already accounts for scale by dividing `getBoundingClientRect()` values by `frameRect.width / DESIGN_WIDTH`. Do not wrap these in an external zoom container.
+
+### Zoom-wrapped demos need coordinate compensation
+
+When CSS `zoom` shrinks a container, `getBoundingClientRect()` returns visual (post-zoom) pixels while `clientWidth` returns logical (pre-zoom) pixels. Every position measurement must divide by the zoom ratio:
+
+```tsx
+function measureInContainer(container: HTMLElement, target: HTMLElement) {
+  const cr = container.getBoundingClientRect();
+  const tr = target.getBoundingClientRect();
+  const z = container.clientWidth > 0 ? cr.width / container.clientWidth : 1;
+  return {
+    x: Math.round((tr.left + tr.width / 2 - cr.left) / z),
+    y: Math.round((tr.top + tr.height / 2 - cr.top) / z),
+  };
+}
+```
+
+This applies whether the cursor is positioned via React state + CSS transitions or GSAP `x`/`y` tweens.
+
+### Defer rendering until zoom is known
+
+Child `useGSAP` hooks measure positions on mount. If they mount before zoom is calculated, they measure against the raw viewport width (e.g., 328px on mobile) instead of the zoomed design width (700px). Every cursor position breaks.
+
+Gate children on zoom being resolved:
+
+```tsx
+const [zoom, setZoom] = useState<number | null>(null);
+
+useLayoutEffect(() => {
+  const w = outerRef.current?.clientWidth ?? 0;
+  setZoom(w > 0 && w < DESIGN_W ? w / DESIGN_W : 1);
+}, []);
+
+return (
+  <div ref={outerRef} className="w-full overflow-hidden">
+    {zoom !== null && (
+      <div style={zoom < 1 ? { width: DESIGN_W, zoom } : undefined}>
+        {children}
+      </div>
+    )}
+  </div>
+);
+```
+
+`useLayoutEffect` runs synchronously after DOM mount but before paint. Children mount into the correctly-sized container on the first visible frame.
+
+### Guard ResizeObserver callbacks against feedback loops
+
+Setting a style property (like `zoom` or `height`) from inside a `ResizeObserver` callback can re-trigger the observer. Always compare against the previous width:
+
+```tsx
+let prevW = 0;
+const update = () => {
+  const w = el.clientWidth;
+  if (w === prevW || w <= 0) return;
+  prevW = w;
+  // ... recalculate
+};
+```
+
 ## Common Mistakes
 
 | Mistake | Fix |
@@ -416,3 +488,7 @@ data-film-send            → send button
 | Click without ripple+squeeze | Both are needed — ripple alone looks like a UI bug |
 | `ease: "power2.out"` on typed text | Typed text should be `ease: "none"` (constant speed) |
 | Multiple useGSAP hooks for one sequence | One hook, one timeline, labels for structure |
+| Raw `getBoundingClientRect()` inside zoomed container | Divide by zoom ratio (`cr.width / container.clientWidth`) to get CSS pixels |
+| Mounting GSAP children before zoom is calculated | Gate children on `zoom !== null` so `useGSAP` measures the correct container |
+| ResizeObserver without width guard | Compare `clientWidth` to previous value to prevent style-triggers-observer loops |
+| Mixing `clientWidth` and `getBoundingClientRect` without compensation | Pick one coordinate space. Inside zoom wrappers, always divide visual pixels by zoom |
