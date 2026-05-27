@@ -81,6 +81,34 @@ The cursor is a positioned SVG that moves via the timeline. It must feel human, 
 
 Never use `ease: "linear"` for cursor movement. Real hands accelerate and decelerate.
 
+### Cursor Stays Alive During Camera Moves
+
+A frozen cursor during a zoom or pan makes the whole demo feel mechanical. Real hands don't stop moving while the scene changes around them. Every camera move should have a simultaneous cursor movement at the same label:
+
+```tsx
+// BAD — cursor is dead during the zoom
+tl.to(zoom, { scale: 1.4, x: panX, y: panY, duration: 0.7 }, "zoomIn");
+// ...cursor doesn't move until "contextNav" label, seconds later
+
+// GOOD — cursor drifts toward its next target during the zoom
+tl.to(zoom, { scale: 1.4, x: panX, y: panY, duration: 0.7, ease: "expo.out" }, "zoomIn");
+tl.to(cursor, {
+  x: current.x + (next.x - current.x) * 0.3,
+  y: current.y + (next.y - current.y) * 0.3,
+  duration: 0.65, ease: "sine.out",
+}, "zoomIn");
+```
+
+The cursor doesn't need to arrive at its next target — a 20–30% drift toward it is enough. It signals "the hand is in motion" without rushing the next action.
+
+**Where to apply this:**
+- **Zoom in:** Cursor drifts toward the context menu / next interaction point
+- **Pan to new area:** Cursor travels to its destination at the same label as the camera pan
+- **Zoom out:** Cursor drifts toward center or its next scene position
+- **Outro:** Cursor drifts offscreen in sync with the camera pull-back
+
+The cursor can be calm, but never dead. Multiple `.to()` calls at the same label run in parallel — use that.
+
 ### Click Feedback
 
 Every click needs two things: a cursor squeeze and a ripple burst.
@@ -474,6 +502,182 @@ const update = () => {
 };
 ```
 
+## Cinematic Pan-Zoom
+
+A pan-zoom pushes the camera into the action area. The `overflow-hidden` container clips content outside the focal point, creating a cinematic crop effect. This is the single most impactful technique for making a demo feel directed rather than mechanical.
+
+### Zoom Wrapper Architecture
+
+GSAP's `scale`/`x`/`y` all write to the `transform` property. If the film frame already has `transform: scale(filmScale)` for responsive sizing, GSAP will overwrite it. Solve this with a zoom wrapper:
+
+```tsx
+<div data-film-frame style={{ transform: `scale(${filmScale})` }}>
+  <div data-film-zoom className="h-full w-full origin-center">
+    {/* All scene content */}
+  </div>
+  {/* Cursor lives OUTSIDE the zoom wrapper so it doesn't scale */}
+  <FilmCursor />
+</div>
+```
+
+GSAP animates `data-film-zoom`. The responsive scale on `data-film-frame` is untouched. The cursor stays outside so it maintains a constant size while content zooms.
+
+Reset the zoom wrapper in the reset block:
+
+```tsx
+gsap.set(q("[data-film-zoom]"), { scale: 1, x: 0, y: 0 });
+```
+
+### Computing Pan Coordinates
+
+To center a target point in the visible viewport at a given zoom level:
+
+```tsx
+const ZOOM = 1.45;
+const panTo = (target: { x: number; y: number }) => ({
+  x: (FILM_WIDTH / 2 - target.x) * (ZOOM - 1),
+  y: (FILM_HEIGHT / 2 - target.y) * (ZOOM - 1),
+});
+```
+
+Pre-compute pan positions for every cursor destination:
+
+```tsx
+const panPin = panTo(p.pinImage);
+const panContext = panTo(p.contextMenuItem);
+const panPicker = panTo(p.pickerCenter);
+const panSave = panTo(p.saveButton);
+```
+
+### Zoom + Pan Choreography Pattern
+
+The camera follows the cursor through UI interactions. Stay zoomed during the entire interaction sequence; only zoom out when switching scenes.
+
+```tsx
+// — Zoom in on right-click —
+tl.to(zoom, {
+  scale: ZOOM, x: panPin.x, y: panPin.y,
+  duration: 0.65, ease: "expo.out",
+}, "zoomIn");
+
+// Context menu appears while zoomed
+tl.to(contextMenu, { autoAlpha: 1, duration: 0.16 }, "zoomIn+=0.35");
+
+// Camera pans to follow cursor to menu item (still zoomed)
+tl.to(zoom, { x: panContext.x, y: panContext.y, duration: 0.6, ease: "sine.inOut" }, "contextNav");
+tl.to(cursor, { x: p.contextMenuItem.x, y: p.contextMenuItem.y, duration: 0.6, ease: "sine.inOut" }, "contextNav");
+
+// Camera pans to follow cursor to picker (still zoomed)
+tl.to(zoom, { x: panPicker.x, y: panPicker.y, duration: 0.55, ease: "sine.inOut" }, "panToPicker");
+
+// Camera pans to save button (still zoomed)
+tl.to(zoom, { x: panSave.x, y: panSave.y, duration: 0.5, ease: "sine.inOut" }, "saveMove");
+tl.to(cursor, { x: p.saveButton.x, y: p.saveButton.y, duration: 0.5, ease: "sine.inOut" }, "saveMove");
+
+// — Only zoom out when switching scenes —
+tl.to(zoom, { scale: 1, x: 0, y: 0, duration: 0.45, ease: "sine.inOut" }, "zoomOut");
+```
+
+**Key rules:**
+- Stay at 3–5% zoom for subtle emphasis. 25–45% for cinematic punch-in.
+- Don't zoom in and out between every interaction. That's PowerPoint. Zoom in once, pan to follow, zoom out once.
+- Match cursor and camera move durations so they arrive together.
+- Context menus and overlays should spawn near the cursor position, not at hardcoded coordinates across the screen.
+
+### Payoff Zoom
+
+After loading a destination scene (e.g., a reference board), zoom into the key result element. This directs the viewer's eye to the payoff:
+
+```tsx
+const ZOOM_RESULT = 1.3;
+const panResult = panTo(newCardPos, ZOOM_RESULT);
+
+// Board loads, cards stagger in...
+tl.to(zoom, {
+  scale: ZOOM_RESULT, x: panResult.x, y: panResult.y,
+  duration: 0.55, ease: "sine.inOut",
+}, "resultZoom");
+
+// Hold so the viewer sees the payoff at close range
+tl.to({}, { duration: 1.8 }, "resultZoom+=0.55");
+```
+
+## Easing Philosophy
+
+Different types of motion need different eases. Using one ease everywhere makes the demo feel monotone.
+
+| Motion type | Ease | Why |
+|-------------|------|-----|
+| Camera pan/zoom | `sine.inOut` | Smoothest acceleration curve. Feels like a real camera on a dolly. |
+| Initial dramatic zoom-in | `expo.out` | Fast start, long gentle deceleration. Creates a "whoosh then settle" feel. |
+| Cursor movement | `sine.inOut` | Natural hand movement. Accelerates out, decelerates in. |
+| Fade in (elements appearing) | `sine.out` | Decelerates into visibility. Element eases into its resting position. |
+| Fade out (elements leaving) | `sine.in` | Accelerates away. Element picks up speed as it disappears. |
+| Click feedback (squeeze) | `power2.out` | Snappy response on press. |
+| Click feedback (release) | `back.out(2.2)` | Slight overshoot on release. Feels physical. |
+| Typed text | `none` | Constant speed. Real typing doesn't ease. |
+| Button press scale | `power2.out` then `sine.out` | Quick press, gentle release. |
+
+**The biggest upgrade:** Replacing `power2.inOut` with `sine.inOut` on camera moves. `power2` has a noticeable acceleration "kick" that feels mechanical. `sine` is butter.
+
+## Graceful Loop Lifecycle
+
+A looping demo has three phases: intro, action, and outro. Most demos nail the first two but snap-reset on loop, breaking the illusion.
+
+### Outro pattern
+
+Before the loop restarts, give the animation a clean exit:
+
+```tsx
+// Zoom back out from the result
+tl.to(zoom, { scale: 1, x: 0, y: 0, duration: 0.8, ease: "sine.inOut" }, "outro");
+
+// Cursor drifts offscreen
+tl.to(cursor, {
+  x: offScreenX, y: offScreenY,
+  duration: 0.7, ease: "sine.in",
+}, "outro+=0.1");
+
+// Breathing room before loop restarts
+tl.to({}, { duration: 0.6 });
+```
+
+**`sine.in` on the cursor exit:** Accelerates away, like a hand pulling back. `sine.out` would decelerate (linger), which feels like the cursor is hesitating.
+
+### Reset block
+
+The reset function at position 0 must cover every animated property, including zoom:
+
+```tsx
+function resetFilm(root: HTMLElement) {
+  const q = gsap.utils.selector(root);
+
+  // Zoom wrapper
+  gsap.set(q("[data-film-zoom]"), { scale: 1, x: 0, y: 0 });
+
+  // Cursor
+  gsap.set(q("[data-film-cursor]"), { x: offScreenX, y: offScreenY, scale: 1 });
+  gsap.set(q("[data-film-ripple]"), { scale: 0, autoAlpha: 0 });
+
+  // Scenes
+  gsap.set(q("[data-film-scene='first']"), { autoAlpha: 1 });
+  gsap.set(q("[data-film-scene='second']"), { autoAlpha: 0 });
+
+  // All animated elements...
+}
+```
+
+Use `repeatDelay: 0` on the timeline and handle pacing through the outro instead. This gives you precise control over the transition feel.
+
+### Timing discipline
+
+First drafts are always too slow. Every dwell, hold, and transition feels right during development but drags when someone watches the loop for the second time.
+
+- Start with generous timing, then cut 20–30% from holds and transitions.
+- Post-action zoom-outs should be 0.4–0.5s, not 0.7–0.8s.
+- Scene loads should overlap with the previous transition, not wait for it.
+- When in doubt, cut time. The viewer can always watch again; they can't un-wait.
+
 ## Common Mistakes
 
 | Mistake | Fix |
@@ -492,3 +696,10 @@ const update = () => {
 | Mounting GSAP children before zoom is calculated | Gate children on `zoom !== null` so `useGSAP` measures the correct container |
 | ResizeObserver without width guard | Compare `clientWidth` to previous value to prevent style-triggers-observer loops |
 | Mixing `clientWidth` and `getBoundingClientRect` without compensation | Pick one coordinate space. Inside zoom wrappers, always divide visual pixels by zoom |
+| Animating `scale`/`x`/`y` on the same element with responsive `transform: scale()` | Use a zoom wrapper inside the frame. GSAP owns the wrapper; CSS owns the frame. |
+| Zooming in and out between every interaction | Zoom in once, pan to follow the cursor, zoom out once when switching scenes |
+| `power2.inOut` on camera pans | Use `sine.inOut` for smooth camera moves, `expo.out` for dramatic zoom-in |
+| Abrupt loop restart | Add an outro: zoom out, cursor drifts offscreen, breathing room, then reset |
+| Context menus spawning far from the cursor | Position overlays at the cursor's current location, not at hardcoded distant coordinates |
+| Frozen cursor during zoom/pan | Always pair camera moves with a simultaneous cursor drift at the same label |
+| First-draft timing left uncut | Cut 20–30% from holds and transitions after the first working version |
